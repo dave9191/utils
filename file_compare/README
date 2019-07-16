@@ -1,0 +1,80 @@
+The classic de-duping problem. 
+
+Over the years I have ended up with multiple copies of my files. When in doubt - backup. It's better to have 2 or 3 backups of the same thing than not having a backup at all. But after years of collecting duplicates I have copied all the files onto my NAS and now I have a mess on my hands - duplicated photos, videos and documents. 
+
+I had a simple question - are all the files in the source directories present in the destination directories? These files might have been renamed, or moved into a different directory structure. I'm not interested that the directories are identical, that the directory structure is the same. I just want to know if all the files in A and its subdirectories are in B and its subdirectories. 
+
+Well lets start:
+
+1 - Need to find a list of all the files in A and B and their respective subdirectories
+2 - Need to generate a hash of each file
+3 - Need to compare the contents of A to B and B to A and list which files are missing from each
+4 - Need a way to be able to inspect the missing files efficiently 
+
+
+If you've got a UNIX system you could do the following:
+(on a mac the md5 command is md5, on linux its md5sum)
+
+Get a list of all the files in the path and its sub directories, and execute the md5 hashing program for each file:
+
+find /path/to/A -type f -exec md5 {} + > ~/contents_of_a.txt
+find /path/to/A -type f -exec md5 {} + > ~/contents_of_b.txt
+
+Get the file counts:
+
+wc -l ~/contents_of_a.txt
+wc -l ~/contents_of_b.txt
+
+Create a list of just the md5 hashes removing any duplicates:
+
+cat ~/contents_of_a.txt | cut -d '=' -f 2 | sort | uniq > ~/contents_md5_of_a.txt
+cat ~/contents_of_b.txt | cut -d '=' -f 2 | sort | uniq > ~/contents_md5_of_b.txt
+
+Get the unique file counts for each path:
+
+wc -l ~/contents_md5_of_a.txt
+wc -l ~/contents_md5_of_b.txt
+
+Get a listing of missing md5s
+
+diff ~/contents_md5_of_a.txt ~/contents_md5_of_b.txt | grep '^>' | sed 's/^>\ //' > missing_md5s.txt
+
+Find the full paths for the md5s:
+
+cat ~/contents_md5_of_b.txt.txt | grep -f missing_md5 > missing_list.txt
+
+Cut out just the paths:
+
+cat missing_list.txt | cut -d '(' -f 2 | cut -d ')' -f1 > missing_file_paths.txt
+
+Then you could copy those files to a separate directory to have a look at them. 
+
+Quite a few steps - enough to get lost in. While this could be wrapped up in a little bash script - not all systems run bash. Not all systems will have the md5 program, not all systems use '/' as a path separator. This is getting complex quickly. And what if I want to pull out more information for comparison - like the largest files, or files with the same name, or whats missing from in the other directory. 
+
+I need something better. 
+
+What about rsync? It's a great tool for synchronising files and directories and checking that the copy is complete. It has lots of options and defaults and sometimes the defaults are not what you want. So it's worth reading through the chunky manual. And if you want to do a verification of a remote copy, you can setup an rsync server on the remote system, so the checks are done locally on both machines. But it fails to answer my question if the files at the destination have been moved around or renamed. 
+
+Well then we have something like fdupes. Linux command line tool which compares files by md5 and size and then does a byte by byte comparison. This is great if you're comparing local directories. But this isn't available for me on all the platforms that I'm using.
+
+Well there are GUI programs for detecting duplicate files - and thats great if all the files are local on your machine. But what if some of these files are on a NAS, some on your machine, some on external hard drives and some on a NAS in a remote location with limited intermittent connectivity? And what if the machines in questions are running different OS's?
+
+So what I want is a simple to use, easy to deploy system for answering my original question. So I decided to write my own. 
+
+The code is pretty simple, written in python and using only standard libraries. It's written to be OS independent, but only tested on OSX and Linux. As long as you have python installed, you're good to go. I've wanted everything in a single file and I don't want to have to install any third party libraries. Sometimes I need to run this on machines isolated from the internet, so grabbing a single file and having all you need is pretty nice.
+
+The first part of this is indexing the directory. This process scans for the files inside the path and the sub directories, building a file list. It then calculates an md5 hash for each file and grabs file meta data. This is all saved into single file sqlite3 database stored in the path you've scanned. The file created is called file_index.db. During access the sqlite database also creates a temp file file_index.db-journal. 
+
+Once this is created you can grab the DB file and move it to another system for comparison. It also means that if you want to compare a single path to multiple other paths, we don't have to re index the directory each time we do a comparison. 
+
+Once you've generated 2 file_index.db files for each directory you want to compare. Then use the compare feature to grab what you need. Since these are SQLite databases, you can also query the file list with SQL to grab whatever combination of data that you're after. 
+
+
+To use:
+
+First index the 2 directories you want to compare. This will create a file_index.db in each direcotry. If one exists it will ovewrite automatically! (so be careful if you have file_index.db files on your system!!)
+./file_compare.py index <path>
+
+
+Then compare 2 of these file_index.db files: 
+./file_compare.py compare <path1> <path2>
